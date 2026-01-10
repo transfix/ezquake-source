@@ -1008,7 +1008,7 @@ void WeatherEffect(void)
 
 			//fixme: see is surface above has SURF_DRAWSKY (we'll come back to that, when the important stuff is done fist, eh?)
 			//if (TruePointContents (impact) == CONTENTS_SKY && trace) {
-			if (Mod_PointInLeaf(impact, cl.worldmodel)->contents == CONTENTS_SKY) {
+			if (cl.worldmodel && cl.worldmodel->nodes && Mod_PointInLeaf(impact, cl.worldmodel)->contents == CONTENTS_SKY) {
 				VectorCopy(impact, org);
 				org[2] = org[2] - 1;
 				AddParticle(p_rain, org, 1, 1, 15, colour, zerodir);
@@ -1029,7 +1029,7 @@ void WeatherEffect(void)
 			TraceLineN(start, org, impact, normal);
 
 			//if (TruePointContents (impact) == CONTENTS_LAVA && trace) {
-			if (Mod_PointInLeaf(impact, cl.worldmodel)->contents == CONTENTS_LAVA) {
+			if (cl.worldmodel && cl.worldmodel->nodes && Mod_PointInLeaf(impact, cl.worldmodel)->contents == CONTENTS_LAVA) {
 				ParticleFirePool(impact);
 			}
 		}

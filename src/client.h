@@ -781,6 +781,16 @@ typedef struct {
 		int      stop_frames;       // Accumulated frames with sidemove=0
 		float    last_sidemove;     // Previous frame's sidemove value
 	} safestrafe;
+
+	// Hybrid server spawn command handling
+	qbool sendSpawnCmd;  // True when we need to send spawn+skins commands on next frame
+	int spawnCmdDelay;    // Frames to wait before sending spawn (gives time for initialization)
+	
+	// Baseline tracking for hybrid servers
+	int baselinesReceived;   // Count of baselines received from server
+	int prespawnPacketCount; // Count of packets received since prespawn, used to wait for baselines
+	qbool serverSentSpawnCmd; // True if server sent "cmd spawn" stufftext
+	qbool sentNewRequest;    // True if we've sent "new" command to request baselines
 } clientState_t;
 
 #define SCORING_SYSTEM_DEFAULT   0

@@ -1059,6 +1059,33 @@ void CL_SendCmd(void)
 		return; // sendcmds come from the demo
 	}
 
+	// For hybrid servers: send spawn+skins commands after a few frames in active state
+	// This gives the rendering system and entity processing time to fully initialize
+	if (cl.sendSpawnCmd) {
+		if (cl.spawnCmdDelay > 0) {
+			cl.spawnCmdDelay--;
+			Com_Printf("=== CL_SendCmd: Waiting to send spawn (delay=%d, state=%d) ===\n", 
+				cl.spawnCmdDelay, cls.state);
+		}
+		else {
+			Com_Printf("=== CL_SendCmd: Sending spawn command (servercount=%d, checksum=%d, state=%d) ===\n", 
+				cl.servercount, cl.map_checksum2, cls.state);
+			Com_Printf("=== WARNING: If server didn't send svc_spawnstatic/svc_spawnbaseline, entities will be missing! ===\n");
+			MSG_WriteByte(&cls.netchan.message, clc_stringcmd);
+			MSG_WriteString(&cls.netchan.message, va("spawn %i 0 %i", cl.servercount, cl.map_checksum2));
+			
+			Com_Printf("=== CL_SendCmd: Sending begin command ===\n");
+			MSG_WriteByte(&cls.netchan.message, clc_stringcmd);
+			MSG_WriteString(&cls.netchan.message, "begin\n");
+			
+			Com_Printf("=== CL_SendCmd: Sending skins command ===\n");
+			MSG_WriteByte(&cls.netchan.message, clc_stringcmd);
+			MSG_WriteString(&cls.netchan.message, "skins\n");
+			
+			cl.sendSpawnCmd = false;  // Only send once
+		}
+	}
+
 #ifdef FTE_PEXT_CHUNKEDDOWNLOADS
 	CL_SendChunkDownloadReq();
 #endif

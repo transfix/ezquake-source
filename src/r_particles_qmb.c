@@ -150,6 +150,10 @@ cvar_t amf_part_fulldetail = { "gl_particle_fulldetail", "0", CVAR_LATCH_GFX };
 
 static int ParticleContents(particle_t* p, vec3_t movement)
 {
+	// Safety check for world model (can be NULL with hybrid netquake/quakeworld servers)
+	if (!cl.clipmodels[1])
+		return CONTENTS_EMPTY;
+	
 	if (gl_part_cache.integer) {
 		float moved;
 

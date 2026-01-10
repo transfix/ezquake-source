@@ -1045,6 +1045,12 @@ qbool V_PreRenderView(void)
 
 	cl.simangles[ROLL] = 0;	// FIXME @@@ 
 
+	// Safety check for world model (can be NULL with hybrid netquake/quakeworld servers)
+	// This prevents crashes in R_SetupFrame and R_RenderView
+	if (cls.state == ca_active && (!cl.worldmodel || !cl.worldmodel->nodes)) {
+		return false;
+	}
+
 	if (cls.state != ca_active) {
 		V_CalcBlend();
 	}

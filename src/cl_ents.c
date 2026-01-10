@@ -486,6 +486,7 @@ void CL_SetupPacketEntity (int number, entity_state_t *state, qbool changed) {
 //Can go from either a baseline or a previous packet_entity
 void CL_ParseDelta (entity_state_t *from, entity_state_t *to, int bits) {
 	int i;
+	static int parse_count = 0;
 #ifdef PROTOCOL_VERSION_FTE
 	int morebits;
 #endif
@@ -512,6 +513,18 @@ void CL_ParseDelta (entity_state_t *from, entity_state_t *to, int bits) {
 #endif
 
 	to->flags = bits;
+	
+	// Debug: Log first 20 entities parsed during connection
+	if (cls.state < ca_active && parse_count < 20) {
+		int has_model = (bits & U_MODEL) || (from->modelindex != 0);
+		Com_Printf("[ENTITY %d] num=%d baseline_model=%d bits=0x%x has_model=%d\n", 
+			parse_count, to->number, from->modelindex, bits, has_model);
+		parse_count++;
+	}
+	if (cls.state == ca_active && parse_count > 0) {
+		parse_count = 0; // Reset for next connection
+	}
+	
 	if (bits & U_MODEL) {
 		to->modelindex = MSG_ReadByte();
 #ifdef FTE_PEXT_MODELDBL
@@ -639,6 +652,14 @@ void CL_ParsePacketEntities (qbool delta)
 	byte from;
 	int maxentities = MAX_MVD_PACKET_ENTITIES; // allow as many as we can handle
 	qbool copy = (cls.netchan.incoming_sequence == 0 && cls.mvdplayback);
+	static int call_count = 0;
+
+	// Debug: Log first few calls to see entity packets
+	if (call_count < 5) {
+		Com_Printf("=== CL_ParsePacketEntities #%d: delta=%d state=%d worldmodel=%p ===\n", 
+			call_count, delta, cls.state, cl.worldmodel);
+		call_count++;
+	}
 
 	newpacket = cls.netchan.incoming_sequence & UPDATE_MASK;
 	newp = &cl.frames[newpacket].packet_entities;
@@ -665,6 +686,18 @@ void CL_ParsePacketEntities (qbool delta)
 		if ((from & UPDATE_MASK) != (oldpacket & UPDATE_MASK)) 
 		{
 			Com_DPrintf ("WARNING: from mismatch (%d vs %d, %d vs %d)\n", (from & UPDATE_MASK), (oldpacket & UPDATE_MASK), from, oldpacket);
+			
+			// If we don't have a valid old packet (oldpacket is 0 or -1), treat this as a full update
+			// instead of dropping it. This can happen when connecting to hybrid servers.
+			if (oldpacket <= 0) {
+				Com_Printf("  No valid delta baseline, treating as full packet\n");
+				oldp = &dummy;
+				dummy.num_entities = 0;
+				full = true;
+				// Continue processing instead of returning
+				goto process_entities;
+			}
+			
 			FlushEntityPacket();
 			cl.validsequence = 0;
 			return;
@@ -691,6 +724,7 @@ void CL_ParsePacketEntities (qbool delta)
 		full = true;
 	}
 
+process_entities:
 	cl.oldvalidsequence = cl.validsequence;
 	cl.validsequence = cls.netchan.incoming_sequence;
 	cl.delta_sequence = cl.validsequence;
@@ -841,14 +875,58 @@ void CL_ParsePacketEntities (qbool delta)
 	}
 
 	newp->num_entities = newindex;
+	
+	// Debug: Show entity count when we get a packet
+	if (cls.state == ca_onserver) {
+		cl.prespawnPacketCount++;
+		Com_Printf("=== Packet has %d entities (prespawnPacketCount=%d, baselinesReceived=%d, serverSentSpawn=%d) ===\n", 
+			newindex, cl.prespawnPacketCount, cl.baselinesReceived, cl.serverSentSpawnCmd);
+	}
+	
 	if (copy) {
 		// do this incase it's FTE demo...
 		memcpy(&cl.frames[1], &cl.frames[0], sizeof(cl.frames[1]));
 	}
 
+	// Only transition to active state if:
+	// 1. We're in ca_onserver state (connected, waiting for first entities)
+	// 2. We have a worldmodel loaded (CL_Prespawn has been called and completed)
+	// This prevents transitioning to active before sounds/models are loaded on hybrid servers
+	// Note: Check state first to prevent calling CL_MakeActive() multiple times
 	if (cls.state == ca_onserver) {
-		// we can now render a frame
-		CL_MakeActive();
+		if (cl.worldmodel) {
+			// For hybrid servers: wait for either:
+			// 1. Baselines to be received, OR
+			// 2. Server to send "cmd spawn", OR
+			// 3. Timeout after receiving many packets (fallback for servers that don't send baselines)
+			qbool hasBaselines = (cl.baselinesReceived > 0);
+			qbool serverReady = cl.serverSentSpawnCmd;
+			qbool timeout = (cl.prespawnPacketCount >= 50); // Fallback after 50 packets
+			
+			if (hasBaselines || serverReady || timeout) {
+				Com_Printf("=== CL_ParsePacketEntities: Going active (baselines=%d, serverSpawn=%d, packets=%d) ===\n",
+					cl.baselinesReceived, cl.serverSentSpawnCmd, cl.prespawnPacketCount);
+				
+				// FTE hybrid server fix: If we timed out without baselines, the server
+				// sent delta-compressed entities before our "new" command was processed.
+				// Schedule a reconnect to get proper entity data.
+				if (timeout && !hasBaselines && !serverReady && !cl.sentNewRequest) {
+					Com_Printf("=== FTE fix: No baselines received, scheduling reconnect ===\n");
+					cl.sentNewRequest = true; // Prevent repeated reconnects
+					Cbuf_AddText("reconnect\n");
+					return; // Don't go active, wait for reconnect
+				}
+				
+				CL_MakeActive();
+			} else {
+				// Still waiting for baselines
+				if (cl.prespawnPacketCount % 10 == 0) {
+					Com_Printf("=== Waiting for baselines... (packets=%d) ===\n", cl.prespawnPacketCount);
+				}
+			}
+		} else {
+			Com_Printf("=== CL_ParsePacketEntities: state=ca_onserver but NO worldmodel yet! ===\n");
+		}
 	}
 }
 

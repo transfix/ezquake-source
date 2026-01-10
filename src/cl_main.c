@@ -401,6 +401,15 @@ void CL_MakeActive(void)
 #ifdef DEBUG_MEMORY_ALLOCATIONS
 	Sys_Printf("\nevent,active (map=%s)\n", host_mapname.string);
 #endif
+
+	// Don't call this function multiple times
+	if (cls.state == ca_active) {
+		Com_DPrintf("CL_MakeActive: Already active, skipping\n");
+		return;
+	}
+
+	Com_Printf("=== CL_MakeActive: Starting transition from state %d to ca_active ===\n", cls.state);
+
 	// last chance
 	CachePics_AtlasFrame();
 	// compile all programs
@@ -409,6 +418,17 @@ void CL_MakeActive(void)
 	}
 
 	cls.state = ca_active;
+	
+	Com_Printf("=== CL_MakeActive: num_statics=%d (static entities like lifts, items) ===\n", cl.num_statics);
+	
+	// For hybrid servers: send "spawn" command after state transition
+	// We delay by a few frames to ensure rendering and entity systems are fully ready
+	// Pure QW servers will send "cmd spawn" via stufftext, but hybrid servers expect us to send it proactively
+	if (!cls.demoplayback && !cls.mvdplayback) {
+		Com_Printf("=== CL_MakeActive: Setting sendSpawnCmd=true, spawnCmdDelay=3 ===\n");
+		cl.sendSpawnCmd = true;
+		cl.spawnCmdDelay = 3;  // Wait 3 frames before sending
+	}
 	if (cls.demoplayback) 
 	{
 		host_skipframe = true;
@@ -426,7 +446,9 @@ void CL_MakeActive(void)
 	// Reset safestrafe state on spawn
 	memset(&cl.safestrafe, 0, sizeof(cl.safestrafe));
 	
+	Com_DPrintf("CL_MakeActive: Transitioning to ca_active, calling TP_ExecTrigger(f_spawn)\n");
 	TP_ExecTrigger("f_spawn");
+	Com_DPrintf("CL_MakeActive: Complete\n");
 }
 
 // Cvar system calls this when a CVAR_USERINFO cvar changes
@@ -440,8 +462,11 @@ void CL_UserinfoChanged (char *key, char *string)
 	{
 		Info_SetValueForKey (cls.userinfo, key, s, MAX_INFO_STRING);
 
+		Com_Printf("CL_UserinfoChanged: key='%s' value='%s' state=%d\n", key, s, cls.state);
+
 		if (cls.state >= ca_connected)
 		{
+			Com_Printf("  -> Sending setinfo to server\n");
 			if (cls.mvdplayback == QTV_PLAYBACK)
 			{
 				QTV_Cmd_Printf(QTV_EZQUAKE_EXT_SETINFO, "setinfo \"%s\" \"%s\"", key, s);
@@ -451,6 +476,10 @@ void CL_UserinfoChanged (char *key, char *string)
 				MSG_WriteByte (&cls.netchan.message, clc_stringcmd);
 				SZ_Print (&cls.netchan.message, va("setinfo \"%s\" \"%s\"", key, s));
 			}
+		}
+		else
+		{
+			Com_Printf("  -> NOT sending (state < ca_connected)\n");
 		}
 	}
 }
@@ -613,6 +642,8 @@ static void CL_SendConnectPacket(
 	strlcpy (biguserinfo, cls.userinfo, sizeof (biguserinfo));
 	extensions = CLIENT_EXTENSIONS &~ (cl_novweps.value ? Z_EXT_VWEP : 0);
 	Info_SetValueForStarKey (biguserinfo, "*z_ext", va("%i", extensions), sizeof(biguserinfo));
+
+	Com_Printf("CL_SendConnectPacket: Sending userinfo: %s\n", biguserinfo);
 
 	snprintf(data, sizeof(data), "\xff\xff\xff\xff" "connect %i %i %i \"%s\"\n", PROTOCOL_VERSION, cls.qport, cls.challenge, biguserinfo);
 
@@ -1986,6 +2017,8 @@ static void CL_InitLocal(void)
 
 	snprintf(st, sizeof(st), "ezQuake v%s %s", VERSION_NUMBER, VERSION);
 	Info_SetValueForStarKey(cls.userinfo, "*ver", st, MAX_INFO_STRING);
+
+	Com_Printf("CL_InitLocal: Initial userinfo after *client/*ver: %s\n", cls.userinfo);
 
 	if (COM_CheckParm(cmdline_param_client_noindphys))
 	{

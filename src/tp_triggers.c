@@ -103,8 +103,13 @@ void TP_ExecTrigger (const char *trigger)
 	int i, j, numteammates = 0;
 	cmd_alias_t *alias;
  
-	if (!tp_triggers.value || ((cls.demoplayback || cl.spectator) && cl_restrictions.value))
+	Com_DPrintf("TP_ExecTrigger: %s (tp_triggers=%d, demoplayback=%d, spectator=%d, restrictions=%d)\n",
+		trigger, (int)tp_triggers.value, cls.demoplayback, cl.spectator, (int)cl_restrictions.value);
+	
+	if (!tp_triggers.value || ((cls.demoplayback || cl.spectator) && cl_restrictions.value)) {
+		Com_DPrintf("  -> BLOCKED (triggers disabled or spectator with restrictions)\n");
 		return;
+	}
  
 	for (i = 0; i < num_f_triggers; i++) {
 		if (!strcmp (f_triggers[i].name, trigger))
@@ -125,15 +130,22 @@ void TP_ExecTrigger (const char *trigger)
 				if (!strcmp(cl.players[j].team, cl.players[cl.playernum].team))
 					numteammates++;
  
-		if (!numteammates)
+		if (!numteammates) {
+			Com_DPrintf("  -> BLOCKED (teamplay trigger but no teammates)\n");
 			return;
+		}
 	}
  
 	if ((alias = Cmd_FindAlias (trigger))) {
+		Com_DPrintf("  -> EXECUTING alias '%s' = '%s'\n", trigger, alias->value);
 		if (!(f_triggers[i].restricted && Rulesets_RestrictTriggers ())) {
 			Cbuf_AddTextEx(alias->flags & ALIAS_SERVER ? &cbuf_svc : &cbuf_main,
 				va("%s\n", alias->value));
+		} else {
+			Com_DPrintf("  -> BLOCKED by ruleset restrictions\n");
 		}
+	} else {
+		Com_DPrintf("  -> No alias defined for trigger '%s'\n", trigger);
 	}
 }
  

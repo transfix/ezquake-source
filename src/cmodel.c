@@ -64,6 +64,9 @@ static cleaf_t		*map_leafs;
 static int			numleafs;
 static int			visleafs;
 
+// Dummy leaf to return when map is not loaded
+static cleaf_t		dummy_leaf = { CONTENTS_SOLID, NULL, {0} };
+
 static byte			map_novis[MAX_MAP_LEAFS/8];
 
 static byte			*map_pvs;					// fully expanded and decompressed
@@ -373,6 +376,11 @@ int	CM_NumInlineModels (void)
 	return numcmodels;
 }
 
+qbool CM_MapLoaded (void)
+{
+	return (numnodes > 0);
+}
+
 char *CM_EntityString (void)
 {
 	return map_entitystring;
@@ -381,6 +389,9 @@ char *CM_EntityString (void)
 int CM_Leafnum (const cleaf_t *leaf)
 {
 	assert (leaf);
+	// Return 0 for dummy leaf (used when map not loaded)
+	if (leaf == &dummy_leaf)
+		return 0;
 	return leaf - map_leafs;
 }
 
@@ -399,8 +410,11 @@ cleaf_t *CM_PointInLeaf (const vec3_t p)
 	cnode_t *node;
 	mplane_t *plane;
 
-	if (!numnodes)
-		Host_Error ("CM_PointInLeaf: numnodes == 0");
+	// Safety check: if map is not loaded or being invalidated, return dummy leaf
+	// This can happen with hybrid netquake/quakeworld servers during map transitions
+	// The dummy leaf will cause CM_Leafnum() to return -1, triggering ambient sound clearing
+	if (!numnodes || !map_nodes || !map_leafs)
+		return &dummy_leaf;
 
 	node = map_nodes;
 	while (1) {

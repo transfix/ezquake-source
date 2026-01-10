@@ -187,6 +187,11 @@ static void S_SDL_Shutdown(void)
 {
 	Con_Printf("Shutting down SDL audio.\n");
 
+	// Pause audio device first to ensure callback stops before we destroy resources
+	if (audiodevid > 0) {
+		SDL_PauseAudioDevice(audiodevid, 1);
+	}
+
 	SDL_CloseAudioDevice(audiodevid);
 	audiodevid = 0;
 
@@ -799,6 +804,15 @@ static void S_UpdateAmbientSounds (void)
 	int adjustment = Q_rint (frametime * s_ambientfade.value);
 
 	if (cls.state != ca_active) {
+		last_adjusted = 0;
+		return;
+	}
+
+	// Don't try to get ambient sounds if world model isn't loaded yet
+	// This can happen during hybrid server connection or when switching maps
+	if (!CM_MapLoaded()) {
+		for (ambient_channel = 0; ambient_channel < NUM_AMBIENTS; ambient_channel++)
+			channels[ambient_channel].sfx = NULL;
 		last_adjusted = 0;
 		return;
 	}

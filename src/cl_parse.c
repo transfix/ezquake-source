@@ -587,10 +587,40 @@ static void CL_TransmitModelCrc (int index, char *info_key)
 
 void CL_Prespawn (void)
 {
+	static int prespawn_call_depth = 0;
+	
+	Com_Printf ("=== CL_Prespawn called: depth=%d, state=%d, worldmodel=%p, model_name[1]='%s' ===\n",
+		prespawn_call_depth, cls.state, cl.worldmodel, cl.model_name[1]);
+	
 	cl.worldmodel = cl.model_precache[1];
-	if (!cl.worldmodel)
-		Host_Error ("Model_NextDownload: NULL worldmodel");
+	if (!cl.worldmodel) {
+		Com_Printf ("CL_Prespawn: worldmodel not loaded yet\n");
+		
+		// Prevent recursive model loading - if we're already in a Model_NextDownload call,
+		// don't trigger it again
+		if (prespawn_call_depth > 0) {
+			Com_Printf ("CL_Prespawn: already loading models (depth=%d), skipping\n", prespawn_call_depth);
+			return;
+		}
+		
+		// With hybrid netquake/quakeworld servers, prespawn may be called before models are loaded
+		// Only trigger model loading if model names exist but haven't been loaded yet
+		if (cl.model_name[1][0]) {
+			Com_Printf ("CL_Prespawn: model list received but not loaded, initiating model download\n");
+			cls.downloadtype = dl_model;
+			cls.downloadnumber = 0;
+			prespawn_call_depth++;
+			Model_NextDownload();
+			prespawn_call_depth--;
+			Com_Printf ("CL_Prespawn: returned from Model_NextDownload, depth now %d\n", prespawn_call_depth);
+			// Model_NextDownload will call VWepModel_NextDownload which calls CL_Prespawn again
+		} else {
+			Com_Printf ("CL_Prespawn: no model list yet, aborting\n");
+		}
+		return;
+	}
 
+	Com_Printf ("CL_Prespawn: worldmodel loaded, proceeding with initialization\n");
 	CL_FindModelNumbers ();
 	R_NewMap (false);
 	TP_NewMap();
@@ -621,10 +651,14 @@ void CL_Prespawn (void)
 	// done with modellist, request first of static signon messages, in case of qtv it different
 	if (cls.mvdplayback == QTV_PLAYBACK)
 	{
+		Com_Printf ("=== Sending qtvspawn to server ===\n");
 		QTV_Cmd_Printf(QTV_EZQUAKE_EXT_DOWNLOAD, "qtvspawn %i", cl.servercount);
 	}
 	else 
 	{
+		Com_Printf ("=== Sending prespawn command to server: servercount=%d, checksum=%d, state=%d ===\n", 
+			cl.servercount, cl.map_checksum2, cls.state);
+		Com_Printf ("=== After prespawn, server should send svc_spawnstatic/svc_spawnbaseline messages ===\n");
 		MSG_WriteByte (&cls.netchan.message, clc_stringcmd);
 		MSG_WriteString (&cls.netchan.message, va("prespawn %i 0 %i", cl.servercount, cl.map_checksum2));
 	}
@@ -771,12 +805,15 @@ void Sound_NextDownload (void)
 			return;		// started a download
 	}
 
+	Com_Printf("Sound_NextDownload: Precaching %d sounds\n", i);
 	for (i = 1; i < MAX_SOUNDS; i++) 
 	{
 		if (!cl.sound_name[i][0])
 			break;
+		Com_Printf("  Precaching sound %d: %s\n", i, cl.sound_name[i]);
 		cl.sound_precache[i] = S_PrecacheSound (cl.sound_name[i]);
 	}
+	Com_Printf("Sound_NextDownload: Completed precaching %d sounds\n", i - 1);
 
 	// Done with sound downloads, go for models
 	cls.downloadnumber = 0;
@@ -1417,7 +1454,9 @@ void CL_ParseServerData (void)
 		if (protover == PROTOCOL_VERSION_FTE)
 		{
 			cls.fteprotocolextensions = MSG_ReadLong();
-			Com_DPrintf ("Using FTE extensions 0x%x\n", cls.fteprotocolextensions);
+			Com_Printf ("*** FTE extensions: 0x%x (SPAWNSTATIC2=%s) ***\n", 
+				cls.fteprotocolextensions,
+				(cls.fteprotocolextensions & FTE_PEXT_SPAWNSTATIC2) ? "YES" : "NO");
 			continue;
 		}
 #endif
@@ -1426,7 +1465,7 @@ void CL_ParseServerData (void)
 		if (protover == PROTOCOL_VERSION_FTE2)
 		{
 			cls.fteprotocolextensions2 = MSG_ReadLong();
-			Com_DPrintf ("Using FTE extensions2 0x%x\n", cls.fteprotocolextensions2);
+			Com_Printf ("*** FTE extensions2: 0x%x ***\n", cls.fteprotocolextensions2);
 			continue;
 		}
 #endif
@@ -3323,6 +3362,16 @@ void CL_ParseStufftext (void)
 #endif
 	else
 	{
+		// Check for spawn-related commands from server
+		if (!strncmp(s, "cmd spawn", 9)) {
+			Com_Printf("*** SERVER SENT 'cmd spawn' - this signals end of static entity phase ***\n");
+			cl.serverSentSpawnCmd = true;
+		} else if (!strncmp(s, "cmd prespawn", 12)) {
+			Com_Printf("*** SERVER SENT 'cmd prespawn' ***\n");
+		} else if (!strncmp(s, "skins", 5)) {
+			Com_Printf("*** SERVER SENT 'skins' command ***\n");
+		}
+		Com_Printf("stufftext (generic): %s\n", s);
 		Cbuf_AddTextEx(&cbuf_svc, s);
 	}
 
@@ -3632,6 +3681,11 @@ void CL_ParseServerMessage (void)
 		else if (cmd < num_svc_strings)
 			SHOWNET(svc_strings[cmd]);
 
+		// Debug: Log all messages during connection to find where static entities should come from
+		if (cls.state < ca_active && cmd < num_svc_strings) {
+			Com_Printf("[STATE %d] svc_%s (cmd=%d)\n", cls.state, svc_strings[cmd], cmd);
+		}
+
 		// Update msg no:
 		if (cmd < NUMMSG)
 			cl_messages[cmd].msgs++;
@@ -3858,24 +3912,30 @@ void CL_ParseServerMessage (void)
 			case svc_spawnbaseline:
 				{
 					i = MSG_ReadShort();
+					Com_Printf("*** svc_spawnbaseline: entity %d ***\n", i);
 					CL_ParseBaseline(&cl_entities[i].baseline);
+					cl.baselinesReceived++;
 					break;
 				}
 #if defined (PROTOCOL_VERSION_FTE) && defined (FTE_PEXT_SPAWNSTATIC2)
 			case svc_fte_spawnbaseline2:
 				{
+					Com_Printf("*** svc_fte_spawnbaseline2 ***\n");
 					CL_ParseSpawnBaseline2();
+					cl.baselinesReceived++;
 					break;
 				}
 #endif // PROTOCOL_VERSION_FTE
 			case svc_spawnstatic:
 				{
+					Com_Printf("*** svc_spawnstatic ***\n");
 					CL_ParseStatic(false);
 					break;
 				}
 #if defined (PROTOCOL_VERSION_FTE) && defined (FTE_PEXT_SPAWNSTATIC2)
 			case svc_fte_spawnstatic2:
 				{
+					Com_Printf("*** svc_fte_spawnstatic2 ***\n");
 					if (cls.fteprotocolextensions & FTE_PEXT_SPAWNSTATIC2)
 						CL_ParseStatic(true);
 					else
